@@ -172,7 +172,6 @@ void dynamic_buzzer(float t, float lux) {
     
     TCCR0A |= (1 << COM0B1); // activare pwm pe buzzer pd5
     float severity = (t >= settings.t_max) ? (t - settings.t_max) : (settings.t_min - t);
-    if (severity > 10.0f) severity = 10.0f;
     OCR0B = (uint8_t)((severity / 10.0f) * 255.0f); // intensitatea sunetului depinde de gravitate
 }
 void update_leds(float t, float h) {
@@ -203,23 +202,27 @@ void update_leds(float t, float h) {
 uint16_t dig_T1, dig_P1; 
 int16_t dig_T2, dig_T3, dig_P2, dig_P3, dig_P4, dig_P5, dig_P6, dig_P7, dig_P8, dig_P9; 
 int32_t t_fine;
+
 uint16_t bmp_read16(uint8_t reg) {
     i2c_start(); i2c_write(BMP280_ADDR << 1); i2c_write(reg);
     i2c_start(); i2c_write((BMP280_ADDR << 1) | 1);
     uint8_t lo = i2c_read(true); uint8_t hi = i2c_read(false);
     i2c_stop(); return (uint16_t)(hi << 8) | lo;
 }
+
 void bmp_read_calibration() {
     dig_T1 = bmp_read16(0x88); dig_T2 = (int16_t)bmp_read16(0x8A); dig_T3 = (int16_t)bmp_read16(0x8C);
     dig_P1 = bmp_read16(0x8E); dig_P2 = (int16_t)bmp_read16(0x90); dig_P3 = (int16_t)bmp_read16(0x92);
     dig_P4 = (int16_t)bmp_read16(0x94); dig_P5 = (int16_t)bmp_read16(0x96); dig_P6 = (int16_t)bmp_read16(0x98);
     dig_P7 = (int16_t)bmp_read16(0x9A); dig_P8 = (int16_t)bmp_read16(0x9C); dig_P9 = (int16_t)bmp_read16(0x9E);
 }
+
 float bmp_compensate_temp(int32_t adc_T) {
     int32_t v1 = ((((adc_T >> 3) - ((int32_t)dig_T1 << 1))) * ((int32_t)dig_T2)) >> 11;
     int32_t v2 = (((((adc_T >> 4) - ((int32_t)dig_T1)) * ((adc_T >> 4) - ((int32_t)dig_T1))) >> 12) * ((int32_t)dig_T3)) >> 14;
     t_fine = v1 + v2; return (float)((t_fine * 5 + 128) >> 8) / 100.0f;
 }
+
 float bmp_compensate_pressure(int32_t adc_P) {
     int64_t v1 = ((int64_t)t_fine) - 128000; int64_t v2 = v1 * v1 * (int64_t)dig_P6;
     v2 += ((v1 * (int64_t)dig_P5) << 17); v2 += ((int64_t)dig_P4 << 35);
@@ -230,6 +233,7 @@ float bmp_compensate_pressure(int32_t adc_P) {
     v1 = ((int64_t)dig_P9 * (p >> 13) * (p >> 13)) >> 25; v2 = ((int64_t)dig_P8 * p) >> 19;
     return (float)(((p + v1 + v2) >> 8) + ((int64_t)dig_P7 << 4)) / 256.0f;
 }
+
 // configurare sistem setup
 void setup() {
     load_from_eeprom(); 
