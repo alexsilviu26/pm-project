@@ -352,7 +352,8 @@ void loop() {
     bool d2_pressed = !(PIND & (1 << PIND2));
     if (d2_pressed) {
         if (!d2_was_pressed) { 
-            d2_was_pressed = true; d2_press_time = millis();
+            d2_was_pressed = true; 
+            d2_press_time = millis();
             long_press_triggered = false; 
         }
         if (!long_press_triggered && (millis() - d2_press_time >= 2000)) {
@@ -485,6 +486,11 @@ void loop() {
             dtostrf(dp, 5, 1, buf); 
             lcd_print(buf); 
             lcd_print(pressure_unit == 1 ? "hPa" : "mmHg");
+            if (manual_mute) 
+                lcd_print(" [M]"); 
+            else if (lux < 10) 
+                lcd_print(" [N]");
+            
             
             lcd_send(0xC0, LCD_CMD);
             if (p_mm > 775) 
@@ -505,6 +511,11 @@ void loop() {
             dtostrf(da, 4, 1, buf); 
             lcd_print(buf); 
             lcd_print(altitude_unit == 1 ? "ft" : "m");
+            if (manual_mute) 
+                lcd_print(" [M]"); 
+            else if (lux < 10) 
+                lcd_print(" [N]");
+            
             
             lcd_send(0xC0, LCD_CMD);
             lcd_print("Lum: ");
