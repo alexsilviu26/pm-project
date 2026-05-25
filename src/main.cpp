@@ -2,66 +2,51 @@
 #include <avr/interrupt.h>
 #include <avr/eeprom.h> 
 #include <math.h>
-
-// =============================================================
-// --- CONFIGURARE ȘI DEFINIȚII ---
-// =============================================================
-
-// Adrese I2C pentru periferice
+// configurare si definitii
+// adrese i2c pentru periferice
 #define LCD_ADDR    0x27
 #define AHT20_ADDR  0x38
 #define BMP280_ADDR 0x77
-
-// Constante pentru controlul LCD-ului prin I2C
+// constante pentru controlul lcdului prin i2c
 #define LCD_CMD     0
 #define LCD_DAT     1
-#define EN          0x04 // Enable bit
-#define BK          0x08 // Backlight bit
-
-// Configurare EEPROM pentru salvarea setărilor
-#define MAGIC_NUMBER 0x44 // Amprentă digitală pentru validarea datelor
+#define EN          0x04 // bit de enable
+#define BK          0x08 // bit pentru lumina de fundal
+// configurare eeprom pentru salvarea setarilor
+#define MAGIC_NUMBER 0x44 // amprenta digitala pentru validarea datelor
 struct DeviceSettings {
     float t_min, t_opt, t_max;
     float h_low, h_high;
     uint8_t magic;
-    float altitude_offset; // Corecție altitudine bazată pe locație
+    float altitude_offset; // corectie altitudine bazata pe locatie
 };
 DeviceSettings settings; 
-
-// --- VARIABILE DE STARE ---
-bool in_menu = false;           // Indicator pentru modul setări
-uint8_t menu_item = 0;          // Elementul selectat în meniu
-volatile uint8_t display_page = 0; // Pagina curentă (0: Temp/Hum, 1: Presiune, 2: Alt/Lux)
-volatile bool manual_mute = false; // Stare dezactivare sonoră manuală
-volatile uint8_t temp_unit = 0;    // 0:C, 1:F, 2:K
-volatile uint8_t pressure_unit = 0;// 0:mmHg, 1:hPa
-volatile uint8_t altitude_unit = 0;// 0:m, 1:ft
-
-// --- FILTRARE DATE PRESIUNE ---
+// variabile de stare
+bool in_menu = false;           // indicator pentru modul setari
+uint8_t menu_item = 0;          // elementul selectat in meniu
+volatile uint8_t display_page = 0; // pagina curenta 0 temp hum 1 presiune 2 alt lux
+volatile bool manual_mute = false; // stare dezactivare sonora manuala
+volatile uint8_t temp_unit = 0;    // 0 c 1 f 2 k
+volatile uint8_t pressure_unit = 0;// 0 mmhg 1 hpa
+volatile uint8_t altitude_unit = 0;// 0 m 1 ft
+// filtrare date presiune
 #define PRESSURE_SAMPLES 10
 float p_buffer[PRESSURE_SAMPLES] = {0};
 uint8_t p_index = 0;
 bool p_filled = false;
-static float P0 = 0; // Presiunea de referință pentru calculul altitudinii
-
-// --- CALIBRARE SENZORI ---
+static float P0 = 0; // presiunea de referinta pentru calculul altitudinii
+// calibrare senzori
 constexpr float AHT20_T_OFFSET = -0.8f;
 constexpr float BMP280_P_OFFSET = 600.0f;
-
-// =============================================================
-// --- GESTIONARE MEMORIE (EEPROM) ---
-// =============================================================
-
-// Salvează structura de setări în memoria permanentă
+// gestionare memorie eeprom
+// salveaza structura de setari in memoria permanenta
 void save_to_eeprom() {
     settings.magic = MAGIC_NUMBER;
     eeprom_update_block((const void*)&settings, (void*)0, sizeof(DeviceSettings));
 }
-
-// Încarcă setările sau aplică valori implicite dacă memoria e goală
+// incarca setarile sau aplica valori implicite daca memoria e goala
 void load_from_eeprom() {
     eeprom_read_block((void*)&settings, (const void*)0, sizeof(DeviceSettings));
-
     if (!isfinite(settings.altitude_offset) || settings.magic != MAGIC_NUMBER) {
         settings.t_min = 5.0f;
         settings.t_opt = 20.0f;
@@ -73,19 +58,14 @@ void load_from_eeprom() {
         save_to_eeprom();
     }
 }
-
-// =============================================================
-// --- ALGORITMI ȘI CALCUL ---
-// =============================================================
-
-// Calcul punct de rouă (Formula Magnus-Tetens)
+// algoritmi si calcul
+// calcul punct de roua formula magnus tetens
 float calculate_dew_point(float t, float h) {
     float a = 17.27f, b = 237.7f;
     float alpha = ((a * t) / (b + t)) + log(h / 100.0f);
     return (b * alpha) / (a - alpha);
 }
-
-// Filtru medie mobilă pentru stabilizarea citirilor de presiune
+// filtru medie mobila pentru stabilizarea citirilor de presiune
 float smooth_pressure(float new_val) {
     p_buffer[p_index] = new_val;
     p_index = (p_index + 1) % PRESSURE_SAMPLES;
@@ -95,72 +75,54 @@ float smooth_pressure(float new_val) {
     for (uint8_t i = 0; i < count; i++) sum += p_buffer[i];
     return sum / count;
 }
-
-// =============================================================
-// --- DRIVERE I2C (Low Level) ---
-// =============================================================
-
+// drivere i2c low level
 void i2c_init() { 
-    TWSR = 0;          // Prescaler 1
-    TWBR = 72;         // Frecvență SCL 100kHz la 16MHz Clock
+    TWSR = 0;          // prescaler 1
+    TWBR = 72;         // frecventa scl 100khz la 16mhz clock
     TWCR = (1 << TWEN); 
 }
-
 bool i2c_start() {
     TWCR = (1 << TWINT) | (1 << TWSTA) | (1 << TWEN);
     uint16_t t = 10000; while (!(TWCR & (1 << TWINT)) && --t);
     return t > 0;
 }
-
 void i2c_stop() { 
     TWCR = (1 << TWINT) | (1 << TWSTO) | (1 << TWEN); 
 }
-
 void i2c_write(uint8_t d) {
     TWDR = d; 
     TWCR = (1 << TWINT) | (1 << TWEN);
     uint16_t t = 10000; while (!(TWCR & (1 << TWINT)) && --t);
 }
-
 uint8_t i2c_read(bool ack) {
     TWCR = (1 << TWINT) | (1 << TWEN) | (ack ? (1 << TWEA) : 0);
     uint16_t t = 10000; while (!(TWCR & (1 << TWINT)) && --t);
     return TWDR;
 }
-
-// =============================================================
-// --- DRIVERE LCD I2C ---
-// =============================================================
-
+// drivere lcd i2c
 void lcd_send(uint8_t val, uint8_t mode) {
     auto p = [&](uint8_t n) {
         i2c_start(); i2c_write(LCD_ADDR << 1);
-        i2c_write(n | mode | BK | EN); // Puls Enable HIGH
-        i2c_write(n | mode | BK);      // Puls Enable LOW
+        i2c_write(n | mode | BK | EN); // puls enable high
+        i2c_write(n | mode | BK);      // puls enable low
         i2c_stop();
     };
-    p(val & 0xF0);        // Trimite nibble superior
-    p((val << 4) & 0xF0); // Trimite nibble inferior
+    p(val & 0xF0);        // trimite nibble superior
+    p((val << 4) & 0xF0); // trimite nibble inferior
 }
-
 void lcd_init() {
     _delay_ms(50); lcd_send(0x30, LCD_CMD); _delay_ms(5);
     lcd_send(0x30, LCD_CMD); lcd_send(0x32, LCD_CMD);
-    lcd_send(0x28, LCD_CMD); // 4-bit, 2 linii
-    lcd_send(0x0C, LCD_CMD); // Display ON, Cursor OFF
-    lcd_send(0x01, LCD_CMD); // Clear display
+    lcd_send(0x28, LCD_CMD); // mod 4bit 2 linii
+    lcd_send(0x0C, LCD_CMD); // display pornit cursor oprit
+    lcd_send(0x01, LCD_CMD); // curatare display
     _delay_ms(2);
 }
-
 void lcd_print(const char* s) { 
     while (*s) lcd_send(*s++, LCD_DAT); 
 }
-
-// =============================================================
-// --- INTERRUPT SERVICE ROUTINES (Butoane) ---
-// =============================================================
-
-// Pin D3 - Plus / Mute (External Interrupt)
+// intreruperi butoane isr
+// pin d3 plus mute intrerupere externa
 ISR(INT1_vect) {
     static unsigned long last_t = 0;
     if (millis() - last_t > 250) {
@@ -178,8 +140,7 @@ ISR(INT1_vect) {
     }
     last_t = millis();
 }
-
-// Pin D4 - Minus / Unități (Pin Change Interrupt)
+// pin d4 minus unitati intrerupere la schimbare pin
 ISR(PCINT2_vect) {
     static unsigned long last_t = 0;
     if (!(PIND & (1 << PIND4)) && (millis() - last_t > 250)) {
@@ -200,29 +161,24 @@ ISR(PCINT2_vect) {
     }
     last_t = millis();
 }
-
-// =============================================================
-// --- CONTROL PERIFERICE (Buzzer, LED-uri) ---
-// =============================================================
-
+// control periferice buzzer leduri
 void dynamic_buzzer(float t, float lux) {
-    bool night_mute = (lux < 10.0f); // Dezactivare automată noaptea
+    bool night_mute = (lux < 10.0f); // dezactivare automata pe timp de noapte
     
-    // Buzzer-ul tace dacă temperatura e în limite sau dacă e silențios
+    // buzzerul tace daca temperatura este in limite sau daca este activat modul silentios
     if (manual_mute || night_mute || (t < settings.t_max && t > settings.t_min)) {
         TCCR0A &= ~(1 << COM0B1); PORTD &= ~(1 << PD5); return;
     }
     
-    TCCR0A |= (1 << COM0B1); // Activare PWM pe Buzzer (PD5)
+    TCCR0A |= (1 << COM0B1); // activare pwm pe buzzer pd5
     float severity = (t >= settings.t_max) ? (t - settings.t_max) : (settings.t_min - t);
     if (severity > 10.0f) severity = 10.0f;
-    OCR0B = (uint8_t)((severity / 10.0f) * 255.0f); // Intensitatea sunetului depinde de gravitate
+    OCR0B = (uint8_t)((severity / 10.0f) * 255.0f); // intensitatea sunetului depinde de gravitate
 }
-
 void update_leds(float t, float h) {
     uint8_t r = 0, g = 0, b = 0;
     
-    // Logica tranzitie culori (Rece -> Albastru, Optim -> Verde, Fierbinte -> Rosu)
+    // logica tranzitie culori rece albastru optim verde fierbinte rosu
     if (t <= settings.t_min) { b = 255; }
     else if (t < settings.t_opt) { 
         b = map(t*10, settings.t_min*10, settings.t_opt*10, 255, 0); 
@@ -233,47 +189,37 @@ void update_leds(float t, float h) {
         r = map(t*10, settings.t_opt*10, settings.t_max*10, 0, 255); 
     }
     else { r = 255; }
-
-    // Aplicare PWM pentru LED RGB (PB2-R, PB1-G, PD6-B)
+    // aplicare pwm pentru led rgb pb2r pb1g pd6b
     if (r == 0) { TCCR1A &= ~(1 << COM1B1); PORTB &= ~(1 << PB2); } else { TCCR1A |= (1 << COM1B1); OCR1B = r; }
     if (g == 0) { TCCR1A &= ~(1 << COM1A1); PORTB &= ~(1 << PB1); } else { TCCR1A |= (1 << COM1A1); OCR1A = g; }
     if (b == 0) { TCCR0A &= ~(1 << COM0A1); PORTD &= ~(1 << PD6); } else { TCCR0A |= (1 << COM0A1); OCR0A = b; }
-
-    // LED-uri discrete pentru umiditate (PB3: Low, PB4: OK, PB5: High)
+    // leduri discrete pentru umiditate pb3 low pb4 ok pb5 high
     PORTB &= ~((1 << PB5) | (1 << PB4) | (1 << PB3));
     if (h < settings.h_low) PORTB |= (1 << PB3); 
     else if (h > settings.h_high) PORTB |= (1 << PB5); 
     else PORTB |= (1 << PB4);
 }
-
-// =============================================================
-// --- BMP280: CALCUL ȘI COMPENSARE ---
-// =============================================================
-
+// bmp280 calcul si compensare
 uint16_t dig_T1, dig_P1; 
 int16_t dig_T2, dig_T3, dig_P2, dig_P3, dig_P4, dig_P5, dig_P6, dig_P7, dig_P8, dig_P9; 
 int32_t t_fine;
-
 uint16_t bmp_read16(uint8_t reg) {
     i2c_start(); i2c_write(BMP280_ADDR << 1); i2c_write(reg);
     i2c_start(); i2c_write((BMP280_ADDR << 1) | 1);
     uint8_t lo = i2c_read(true); uint8_t hi = i2c_read(false);
     i2c_stop(); return (uint16_t)(hi << 8) | lo;
 }
-
 void bmp_read_calibration() {
     dig_T1 = bmp_read16(0x88); dig_T2 = (int16_t)bmp_read16(0x8A); dig_T3 = (int16_t)bmp_read16(0x8C);
     dig_P1 = bmp_read16(0x8E); dig_P2 = (int16_t)bmp_read16(0x90); dig_P3 = (int16_t)bmp_read16(0x92);
     dig_P4 = (int16_t)bmp_read16(0x94); dig_P5 = (int16_t)bmp_read16(0x96); dig_P6 = (int16_t)bmp_read16(0x98);
     dig_P7 = (int16_t)bmp_read16(0x9A); dig_P8 = (int16_t)bmp_read16(0x9C); dig_P9 = (int16_t)bmp_read16(0x9E);
 }
-
 float bmp_compensate_temp(int32_t adc_T) {
     int32_t v1 = ((((adc_T >> 3) - ((int32_t)dig_T1 << 1))) * ((int32_t)dig_T2)) >> 11;
     int32_t v2 = (((((adc_T >> 4) - ((int32_t)dig_T1)) * ((adc_T >> 4) - ((int32_t)dig_T1))) >> 12) * ((int32_t)dig_T3)) >> 14;
     t_fine = v1 + v2; return (float)((t_fine * 5 + 128) >> 8) / 100.0f;
 }
-
 float bmp_compensate_pressure(int32_t adc_P) {
     int64_t v1 = ((int64_t)t_fine) - 128000; int64_t v2 = v1 * v1 * (int64_t)dig_P6;
     v2 += ((v1 * (int64_t)dig_P5) << 17); v2 += ((int64_t)dig_P4 << 35);
@@ -284,72 +230,62 @@ float bmp_compensate_pressure(int32_t adc_P) {
     v1 = ((int64_t)dig_P9 * (p >> 13) * (p >> 13)) >> 25; v2 = ((int64_t)dig_P8 * p) >> 19;
     return (float)(((p + v1 + v2) >> 8) + ((int64_t)dig_P7 << 4)) / 256.0f;
 }
-
-// =============================================================
-// --- CONFIGURARE SISTEM (SETUP) ---
-// =============================================================
-
+// configurare sistem setup
 void setup() {
     load_from_eeprom(); 
     
-    // Configurare PINI Output
-    DDRB |= 0x3F; // PB0-PB5 ieșiri
-    DDRD |= (1 << DDD5) | (1 << DDD6); // PD5 (Buzzer), PD6 (Blue LED)
+    // configurare pini de iesire
+    DDRB |= 0x3F; // pb0pb5 devin iesiri
+    DDRD |= (1 << DDD5) | (1 << DDD6); // pd5 buzzer pd6 led albastru
     
-    // Configurare Pull-ups butoane
+    // configurare rezistente pullup pentru butoane
     PORTD |= (1 << PORTD2) | (1 << PORTD3) | (1 << PORTD4);
     
-    // Configurare Timer 1 (Fast PWM 8-bit pentru Red/Green LED)
+    // configurare timer 1 fast pwm 8bit pentru led rosu verde
     TCCR1A = (1 << WGM10) | (1 << COM1A1) | (1 << COM1B1);
     TCCR1B = (1 << WGM12) | (1 << CS11) | (1 << CS10);
     
-    // Configurare Timer 0 (Fast PWM pentru Buzzer și Blue LED)
+    // configurare timer 0 fast pwm pentru buzzer si led albastru
     TCCR0A |= (1 << COM0A1) | (1 << WGM00) | (1 << WGM01); 
     TCCR0B |= (1 << CS01) | (1 << CS00);
-
-    // Activare întreruperi externe
+    // activare intreruperi externe
     EICRA |= (1 << ISC11); 
     EIMSK |= (1 << INT1);
     PCICR  |= (1 << PCIE2); 
     PCMSK2 |= (1 << PCINT20);
     
-    // Configurare ADC (Lumina) - Pin A3
+    // configurare adc senzor lumina pin a3
     ADMUX  = (1 << REFS0) | (1 << MUX1) | (1 << MUX0);
     ADCSRA = (1 << ADEN) | (1 << ADPS2) | (1 << ADPS1) | (1 << ADPS0);
     
-    sei(); // Activare globală întreruperi
+    sei(); // activare globala intreruperi
     i2c_init(); 
     lcd_init();
     
-    // Inițializare Senzori
+    // initializare senzori
     if (i2c_start()) { i2c_write(BMP280_ADDR << 1); i2c_write(0xF4); i2c_write(0x57); i2c_stop(); }
     delay(100); bmp_read_calibration();
     if (i2c_start()) { i2c_write(AHT20_ADDR << 1); i2c_write(0xBE); i2c_write(0x08); i2c_write(0x00); i2c_stop(); }
     
-    // Mesaj de bun venit
+    // mesaj de bun venit pe ecran
     lcd_print("  Statie Meteo  "); 
     lcd_send(0xC0, LCD_CMD); 
     lcd_print("Nicolaescu Alex");
     delay(1500); 
     lcd_send(0x01, LCD_CMD);
 }
-
-// =============================================================
-// --- CICLUL PRINCIPAL (LOOP) ---
-// =============================================================
-
+// ciclul principal loop
 void loop() {
     static unsigned long d2_press_time = 0;
     static bool d2_was_pressed = false, long_press_triggered = false;
-
-    // --- LOGICĂ BUTON D2: MENIU (APĂSARE LUNGĂ) / NAVIGARE (SCURTĂ) ---
+    // logica buton d2 meniu apasare lunga navigare apasare scurta
     bool d2_pressed = !(PIND & (1 << PIND2));
     if (d2_pressed) {
         if (!d2_was_pressed) { d2_was_pressed = true; d2_press_time = millis(); long_press_triggered = false; }
         if (!long_press_triggered && (millis() - d2_press_time >= 2000)) {
             in_menu = !in_menu; 
             long_press_triggered = true;
-            if (!in_menu) save_to_eeprom(); // Salvează setările la ieșirea din meniu
+            if (!in_menu) save_to_eeprom(); // salveaza setarile la iesirea din meniu
             lcd_send(0x01, LCD_CMD); 
             if (in_menu) menu_item = 0;
             delay(250);
@@ -364,8 +300,7 @@ void loop() {
             d2_was_pressed = false;
         }
     }
-
-    // --- AFIȘARE MOD MENIU ---
+    // afisare mod meniu
     if (in_menu) {
         char valBuf[10];
         lcd_send(0x80, LCD_CMD); lcd_print("SETARI PRAGURI:");
@@ -381,9 +316,9 @@ void loop() {
         lcd_print(valBuf); lcd_print("   ");
         delay(100);
     } 
-    // --- AFIȘARE MOD MONITORIZARE (PAGINI) ---
+    // afisare mod monitorizare pagini
     else {
-        // Citire AHT20 (Umiditate și Temperatură)
+        // citire aht20 umiditate si temperatura
         i2c_start(); i2c_write(AHT20_ADDR << 1); i2c_write(0xAC); i2c_write(0x33); i2c_write(0x00); i2c_stop();
         delay(80);
         i2c_start(); i2c_write((AHT20_ADDR << 1) | 1);
@@ -391,8 +326,7 @@ void loop() {
         
         float h = (((uint32_t)h1 << 12) | ((uint32_t)h2 << 4) | (h3 >> 4)) * 100.0f / 1048576.0f;
         float t = ((((uint32_t)h3 & 0x0F) << 16) | ((uint32_t)t1 << 8) | t2) * 200.0f / 1048576.0f - 50.0f + AHT20_T_OFFSET;
-
-        // Citire BMP280 (Presiune)
+        // citire bmp280 presiune
         i2c_start(); i2c_write(BMP280_ADDR << 1); i2c_write(0xF7);
         i2c_start(); i2c_write((BMP280_ADDR << 1) | 1);
         uint8_t p_msb=i2c_read(true), p_lsb=i2c_read(true), p_xlsb=i2c_read(true), t_msb=i2c_read(true), t_lsb=i2c_read(true), t_xlsb=i2c_read(false); i2c_stop();
@@ -401,26 +335,22 @@ void loop() {
         float p_pa = bmp_compensate_pressure(((int32_t)p_msb << 12) | ((int32_t)p_lsb << 4) | (p_xlsb >> 4)) + BMP280_P_OFFSET;
         
         if (!isfinite(p_pa) || p_pa <= 0) return;
-        if (!isfinite(P0) || P0 <= 0) P0 = p_pa; // Prima citire devine referința
-
-        // Calcul Altitudine
+        if (!isfinite(P0) || P0 <= 0) P0 = p_pa; // prima citire devine referinta pentru calcul
+        // calcul altitudine
         float ratio = p_pa / P0;
         if (!isfinite(ratio) || ratio <= 0.0f) ratio = 0.0001f;
         float alt_raw = 44330.0f * (1.0f - powf(ratio, 0.1903f));
         float alt = alt_raw + settings.altitude_offset;
         float p_mm = smooth_pressure(p_pa / 133.322f);
-
-        // Citire Lux (Senzor analogic)
+        // citire lux senzor analogic de lumina
         ADCSRA |= (1 << ADSC); while (ADCSRA & (1 << ADSC));
         float lux = (float)ADC * 0.9765f;
-
         update_leds(t, h);
         dynamic_buzzer(t, lux);
-
         char buf[16];
         lcd_send(0x01, LCD_CMD); delay(2);
         
-        // Pagina 0: Temperatură, Umiditate și Punct de Rouă
+        // pagina 0 temperatura umiditate si punct de roua
         if (display_page == 0) {
             float dt = (temp_unit == 1) ? t * 1.8 + 32 : (temp_unit == 2 ? t + 273.15 : t);
             lcd_print("T:"); dtostrf(dt, 5, 1, buf); lcd_print(buf); 
@@ -433,7 +363,7 @@ void loop() {
             float ddp = (temp_unit == 1) ? dp_c * 1.8 + 32 : (temp_unit == 2 ? dp_c + 273.15 : dp_c);
             dtostrf(ddp, 4, 1, buf); lcd_print(buf);
         } 
-        // Pagina 1: Presiune și Prognoză simplă
+        // pagina 1 presiune si prognoza simpla
         else if (display_page == 1) {
             float dp = (pressure_unit == 1) ? p_mm * 1.33322f : p_mm;
             lcd_print("P:"); dtostrf(dp, 5, 1, buf); lcd_print(buf); 
@@ -446,7 +376,7 @@ void loop() {
             else if (p_mm > 730) lcd_print("Innorat"); 
             else lcd_print("Ploaie/Furtuna");
         } 
-        // Pagina 2: Altitudine și Luminozitate
+        // pagina 2 altitudine si luminozitate
         else {
             float da = (altitude_unit == 1) ? alt * 3.28084f : alt;
             lcd_print("Alt:"); dtostrf(da, 4, 1, buf); lcd_print(buf); 
