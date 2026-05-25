@@ -3,29 +3,31 @@
 #include <avr/eeprom.h> 
 #include <math.h>
 // configurare si definitii
-// adrese i2c pentru periferice
+// adrese i2c
 #define LCD_ADDR    0x27
 #define AHT20_ADDR  0x38
 #define BMP280_ADDR 0x77
+
 // constante pentru controlul lcdului prin i2c
 #define LCD_CMD     0
 #define LCD_DAT     1
 #define EN          0x04 // bit de enable
 #define BK          0x08 // bit pentru lumina de fundal
+
 // configurare eeprom pentru salvarea setarilor
-#define MAGIC_NUMBER 0x44 // amprenta digitala pentru validarea datelor
+#define MAGIC_NUMBER 0x44 // verificare scriere eeprom
 struct DeviceSettings {
     float t_min, t_opt, t_max;
     float h_low, h_high;
     uint8_t magic;
-    float altitude_offset; // corectie altitudine bazata pe locatie
+    float altitude_offset; // corectie altitudine
 };
 DeviceSettings settings; 
 // variabile de stare
-bool in_menu = false;           // indicator pentru modul setari
-uint8_t menu_item = 0;          // elementul selectat in meniu
-volatile uint8_t display_page = 0; // pagina curenta 0 temp hum 1 presiune 2 alt lux
-volatile bool manual_mute = false; // stare dezactivare sonora manuala
+bool in_menu = false;           // indicator setari
+uint8_t menu_item = 0;          // elementul selectat
+volatile uint8_t display_page = 0; // pagina curenta
+volatile bool manual_mute = false; // stare mute
 volatile uint8_t temp_unit = 0;    // 0 c 1 f 2 k
 volatile uint8_t pressure_unit = 0;// 0 mmhg 1 hpa
 volatile uint8_t altitude_unit = 0;// 0 m 1 ft
@@ -58,14 +60,14 @@ void load_from_eeprom() {
         save_to_eeprom();
     }
 }
-// algoritmi si calcul
+
 // calcul punct de roua formula magnus tetens
 float calculate_dew_point(float t, float h) {
     float a = 17.27f, b = 237.7f;
     float alpha = ((a * t) / (b + t)) + log(h / 100.0f);
     return (b * alpha) / (a - alpha);
 }
-// filtru medie mobila pentru stabilizarea citirilor de presiune
+// filtru medie mobila pentru presiune
 float smooth_pressure(float new_val) {
     p_buffer[p_index] = new_val;
     p_index = (p_index + 1) % PRESSURE_SAMPLES;
@@ -75,10 +77,10 @@ float smooth_pressure(float new_val) {
     for (uint8_t i = 0; i < count; i++) sum += p_buffer[i];
     return sum / count;
 }
-// drivere i2c low level
+
 void i2c_init() { 
-    TWSR = 0;          // prescaler 1
-    TWBR = 72;         // frecventa scl 100khz la 16mhz clock
+    TWSR = 0;
+    TWBR = 72;
     TWCR = (1 << TWEN); 
 }
 bool i2c_start() {
@@ -99,23 +101,23 @@ uint8_t i2c_read(bool ack) {
     uint16_t t = 10000; while (!(TWCR & (1 << TWINT)) && --t);
     return TWDR;
 }
-// drivere lcd i2c
+
 void lcd_send(uint8_t val, uint8_t mode) {
     auto p = [&](uint8_t n) {
         i2c_start(); i2c_write(LCD_ADDR << 1);
-        i2c_write(n | mode | BK | EN); // puls enable high
-        i2c_write(n | mode | BK);      // puls enable low
+        i2c_write(n | mode | BK | EN);
+        i2c_write(n | mode | BK);
         i2c_stop();
     };
-    p(val & 0xF0);        // trimite nibble superior
-    p((val << 4) & 0xF0); // trimite nibble inferior
+    p(val & 0xF0);
+    p((val << 4) & 0xF0);
 }
 void lcd_init() {
     _delay_ms(50); lcd_send(0x30, LCD_CMD); _delay_ms(5);
     lcd_send(0x30, LCD_CMD); lcd_send(0x32, LCD_CMD);
-    lcd_send(0x28, LCD_CMD); // mod 4bit 2 linii
-    lcd_send(0x0C, LCD_CMD); // display pornit cursor oprit
-    lcd_send(0x01, LCD_CMD); // curatare display
+    lcd_send(0x28, LCD_CMD);
+    lcd_send(0x0C, LCD_CMD);
+    lcd_send(0x01, LCD_CMD);
     _delay_ms(2);
 }
 void lcd_print(const char* s) { 
@@ -129,12 +131,18 @@ ISR(INT1_vect) {
         if (!in_menu) manual_mute = !manual_mute;
         else {
             switch(menu_item) {
-                case 0: settings.t_min += 0.5f; break;
-                case 1: settings.t_opt += 0.5f; break;
-                case 2: settings.t_max += 0.5f; break;
-                case 3: settings.h_low += 1.0f; break;
-                case 4: settings.h_high += 1.0f; break;
-                case 5: settings.altitude_offset += 1.0f; break;
+                case 0: settings.t_min += 0.5f; 
+                        break;
+                case 1: settings.t_opt += 0.5f; 
+                        break;
+                case 2: settings.t_max += 0.5f; 
+                        break;
+                case 3: settings.h_low += 1.0f; 
+                        break;
+                case 4: settings.h_high += 1.0f; 
+                        break;
+                case 5: settings.altitude_offset += 1.0f; 
+                        break;
             }
         }
     }
@@ -150,12 +158,18 @@ ISR(PCINT2_vect) {
             else altitude_unit = (altitude_unit + 1) % 2;
         } else {
             switch(menu_item) {
-                case 0: settings.t_min -= 0.5f; break;
-                case 1: settings.t_opt -= 0.5f; break;
-                case 2: settings.t_max -= 0.5f; break;
-                case 3: settings.h_low -= 1.0f; break;
-                case 4: settings.h_high -= 1.0f; break;
-                case 5: settings.altitude_offset -= 1.0f; break;
+                case 0: settings.t_min -= 0.5f; 
+                        break;
+                case 1: settings.t_opt -= 0.5f; 
+                        break;
+                case 2: settings.t_max -= 0.5f; 
+                        break;
+                case 3: settings.h_low -= 1.0f; 
+                        break;
+                case 4: settings.h_high -= 1.0f; 
+                        break;
+                case 5: settings.altitude_offset -= 1.0f; 
+                        break;
             }
         }
     }
@@ -167,7 +181,9 @@ void dynamic_buzzer(float t, float lux) {
     
     // buzzerul tace daca temperatura este in limite sau daca este activat modul silentios
     if (manual_mute || night_mute || (t < settings.t_max && t > settings.t_min)) {
-        TCCR0A &= ~(1 << COM0B1); PORTD &= ~(1 << PD5); return;
+        TCCR0A &= ~(1 << COM0B1); 
+        PORTD &= ~(1 << PD5); 
+        return;
     }
     
     TCCR0A |= (1 << COM0B1); // activare pwm pe buzzer pd5
@@ -175,10 +191,12 @@ void dynamic_buzzer(float t, float lux) {
     OCR0B = (uint8_t)((severity / 10.0f) * 255.0f); // intensitatea sunetului depinde de gravitate
 }
 void update_leds(float t, float h) {
+    
     uint8_t r = 0, g = 0, b = 0;
     
     // logica tranzitie culori rece albastru optim verde fierbinte rosu
-    if (t <= settings.t_min) { b = 255; }
+    if (t <= settings.t_min) 
+        b = 255;
     else if (t < settings.t_opt) { 
         b = map(t*10, settings.t_min*10, settings.t_opt*10, 255, 0); 
         g = map(t*10, settings.t_min*10, settings.t_opt*10, 0, 255); 
@@ -189,14 +207,34 @@ void update_leds(float t, float h) {
     }
     else { r = 255; }
     // aplicare pwm pentru led rgb pb2r pb1g pd6b
-    if (r == 0) { TCCR1A &= ~(1 << COM1B1); PORTB &= ~(1 << PB2); } else { TCCR1A |= (1 << COM1B1); OCR1B = r; }
-    if (g == 0) { TCCR1A &= ~(1 << COM1A1); PORTB &= ~(1 << PB1); } else { TCCR1A |= (1 << COM1A1); OCR1A = g; }
-    if (b == 0) { TCCR0A &= ~(1 << COM0A1); PORTD &= ~(1 << PD6); } else { TCCR0A |= (1 << COM0A1); OCR0A = b; }
+    if (r == 0) { 
+        TCCR1A &= ~(1 << COM1B1); 
+        PORTB &= ~(1 << PB2); 
+    } else { 
+        TCCR1A |= (1 << COM1B1); 
+        OCR1B = r; }
+    if (g == 0) { 
+        TCCR1A &= ~(1 << COM1A1); 
+        PORTB &= ~(1 << PB1); 
+    } else { 
+        TCCR1A |= (1 << COM1A1); 
+        OCR1A = g; }
+    if (b == 0) { 
+        TCCR0A &= ~(1 << COM0A1); 
+        PORTD &= ~(1 << PD6);
+    } else { 
+        TCCR0A |= (1 << COM0A1);
+         OCR0A = b; 
+    }
     // leduri discrete pentru umiditate pb3 low pb4 ok pb5 high
     PORTB &= ~((1 << PB5) | (1 << PB4) | (1 << PB3));
-    if (h < settings.h_low) PORTB |= (1 << PB3); 
-    else if (h > settings.h_high) PORTB |= (1 << PB5); 
-    else PORTB |= (1 << PB4);
+    if (h < settings.h_low) 
+        PORTB |= (1 << PB3); 
+    else 
+        if (h > settings.h_high) 
+            PORTB |= (1 << PB5); 
+        else 
+            PORTB |= (1 << PB4);
 }
 // bmp280 calcul si compensare
 uint16_t dig_T1, dig_P1; 
@@ -204,33 +242,50 @@ int16_t dig_T2, dig_T3, dig_P2, dig_P3, dig_P4, dig_P5, dig_P6, dig_P7, dig_P8, 
 int32_t t_fine;
 
 uint16_t bmp_read16(uint8_t reg) {
-    i2c_start(); i2c_write(BMP280_ADDR << 1); i2c_write(reg);
-    i2c_start(); i2c_write((BMP280_ADDR << 1) | 1);
-    uint8_t lo = i2c_read(true); uint8_t hi = i2c_read(false);
-    i2c_stop(); return (uint16_t)(hi << 8) | lo;
+    i2c_start(); 
+    i2c_write(BMP280_ADDR << 1); 
+    i2c_write(reg);
+    i2c_start(); 
+    i2c_write((BMP280_ADDR << 1) | 1);
+    uint8_t lo = i2c_read(true);
+    uint8_t hi = i2c_read(false);
+    i2c_stop(); 
+    return (uint16_t)(hi << 8) | lo;
 }
 
 void bmp_read_calibration() {
-    dig_T1 = bmp_read16(0x88); dig_T2 = (int16_t)bmp_read16(0x8A); dig_T3 = (int16_t)bmp_read16(0x8C);
-    dig_P1 = bmp_read16(0x8E); dig_P2 = (int16_t)bmp_read16(0x90); dig_P3 = (int16_t)bmp_read16(0x92);
-    dig_P4 = (int16_t)bmp_read16(0x94); dig_P5 = (int16_t)bmp_read16(0x96); dig_P6 = (int16_t)bmp_read16(0x98);
-    dig_P7 = (int16_t)bmp_read16(0x9A); dig_P8 = (int16_t)bmp_read16(0x9C); dig_P9 = (int16_t)bmp_read16(0x9E);
+    dig_T1 = bmp_read16(0x88); dig_T2 = (int16_t)bmp_read16(0x8A); 
+    dig_T3 = (int16_t)bmp_read16(0x8C);
+    dig_P1 = bmp_read16(0x8E); dig_P2 = (int16_t)bmp_read16(0x90); 
+    dig_P3 = (int16_t)bmp_read16(0x92);
+    dig_P4 = (int16_t)bmp_read16(0x94); 
+    dig_P5 = (int16_t)bmp_read16(0x96); 
+    dig_P6 = (int16_t)bmp_read16(0x98);
+    dig_P7 = (int16_t)bmp_read16(0x9A); 
+    dig_P8 = (int16_t)bmp_read16(0x9C); 
+    dig_P9 = (int16_t)bmp_read16(0x9E);
 }
 
 float bmp_compensate_temp(int32_t adc_T) {
     int32_t v1 = ((((adc_T >> 3) - ((int32_t)dig_T1 << 1))) * ((int32_t)dig_T2)) >> 11;
     int32_t v2 = (((((adc_T >> 4) - ((int32_t)dig_T1)) * ((adc_T >> 4) - ((int32_t)dig_T1))) >> 12) * ((int32_t)dig_T3)) >> 14;
-    t_fine = v1 + v2; return (float)((t_fine * 5 + 128) >> 8) / 100.0f;
+    t_fine = v1 + v2;
+    return (float)((t_fine * 5 + 128) >> 8) / 100.0f;
 }
 
 float bmp_compensate_pressure(int32_t adc_P) {
-    int64_t v1 = ((int64_t)t_fine) - 128000; int64_t v2 = v1 * v1 * (int64_t)dig_P6;
-    v2 += ((v1 * (int64_t)dig_P5) << 17); v2 += ((int64_t)dig_P4 << 35);
+    int64_t v1 = ((int64_t)t_fine) - 128000;
+    int64_t v2 = v1 * v1 * (int64_t)dig_P6;
+    v2 += ((v1 * (int64_t)dig_P5) << 17);
+    v2 += ((int64_t)dig_P4 << 35);
     v1 = ((v1 * v1 * (int64_t)dig_P3) >> 8) + ((v1 * (int64_t)dig_P2) << 12);
     v1 = (((int64_t)1 << 47) + v1) * ((int64_t)dig_P1) >> 33;
-    if (v1 == 0) return 0;
-    int64_t p = 1048576 - adc_P; p = (((p << 31) - v2) * 3125) / v1;
-    v1 = ((int64_t)dig_P9 * (p >> 13) * (p >> 13)) >> 25; v2 = ((int64_t)dig_P8 * p) >> 19;
+    if (v1 == 0) 
+        return 0;
+    int64_t p = 1048576 - adc_P;
+    p = (((p << 31) - v2) * 3125) / v1;
+    v1 = ((int64_t)dig_P9 * (p >> 13) * (p >> 13)) >> 25;
+    v2 = ((int64_t)dig_P8 * p) >> 19;
     return (float)(((p + v1 + v2) >> 8) + ((int64_t)dig_P7 << 4)) / 256.0f;
 }
 
@@ -267,9 +322,20 @@ void setup() {
     lcd_init();
     
     // initializare senzori
-    if (i2c_start()) { i2c_write(BMP280_ADDR << 1); i2c_write(0xF4); i2c_write(0x57); i2c_stop(); }
-    delay(100); bmp_read_calibration();
-    if (i2c_start()) { i2c_write(AHT20_ADDR << 1); i2c_write(0xBE); i2c_write(0x08); i2c_write(0x00); i2c_stop(); }
+    if (i2c_start()) { 
+        i2c_write(BMP280_ADDR << 1);
+        i2c_write(0xF4);
+        i2c_write(0x57);
+        i2c_stop(); }
+    delay(100); 
+    bmp_read_calibration();
+    if (i2c_start()) { 
+        i2c_write(AHT20_ADDR << 1); 
+        i2c_write(0xBE); 
+        i2c_write(0x08); 
+        i2c_write(0x00); 
+        i2c_stop(); 
+    }
     
     // mesaj de bun venit pe ecran
     lcd_print("  Statie Meteo  "); 
@@ -285,20 +351,27 @@ void loop() {
     // logica buton d2 meniu apasare lunga navigare apasare scurta
     bool d2_pressed = !(PIND & (1 << PIND2));
     if (d2_pressed) {
-        if (!d2_was_pressed) { d2_was_pressed = true; d2_press_time = millis(); long_press_triggered = false; }
+        if (!d2_was_pressed) { 
+            d2_was_pressed = true; d2_press_time = millis();
+            long_press_triggered = false; 
+        }
         if (!long_press_triggered && (millis() - d2_press_time >= 2000)) {
             in_menu = !in_menu; 
             long_press_triggered = true;
-            if (!in_menu) save_to_eeprom(); // salveaza setarile la iesirea din meniu
+            if (!in_menu) 
+                save_to_eeprom(); // salveaza setarile la iesirea din meniu
             lcd_send(0x01, LCD_CMD); 
-            if (in_menu) menu_item = 0;
+            if (in_menu) 
+                menu_item = 0;
             delay(250);
         }
     } else {
         if (d2_was_pressed) {
             if (!long_press_triggered) {
-                if (!in_menu) display_page = (display_page + 1) % 3;
-                else menu_item = (menu_item + 1) % 6;
+                if (!in_menu) 
+                    display_page = (display_page + 1) % 3;
+                else 
+                    menu_item = (menu_item + 1) % 6;
                 delay(120);
             }
             d2_was_pressed = false;
@@ -307,47 +380,76 @@ void loop() {
     // afisare mod meniu
     if (in_menu) {
         char valBuf[10];
-        lcd_send(0x80, LCD_CMD); lcd_print("SETARI PRAGURI:");
+        lcd_send(0x80, LCD_CMD); 
+        lcd_print("SETARI PRAGURI:");
         lcd_send(0xC0, LCD_CMD);
         switch(menu_item) {
-            case 0: lcd_print("T min: "); dtostrf(settings.t_min, 4, 1, valBuf); break;
-            case 1: lcd_print("T opt: "); dtostrf(settings.t_opt, 4, 1, valBuf); break;
-            case 2: lcd_print("T max: "); dtostrf(settings.t_max, 4, 1, valBuf); break;
-            case 3: lcd_print("H low: "); dtostrf(settings.h_low, 4, 1, valBuf); break;
-            case 4: lcd_print("H high:"); dtostrf(settings.h_high, 4, 1, valBuf); break;
-            case 5: lcd_print("Alt offset: "); dtostrf(settings.altitude_offset, 4, 1, valBuf); break;
+            case 0: lcd_print("T min: "); 
+                dtostrf(settings.t_min, 4, 1, valBuf); 
+                break;
+            case 1: lcd_print("T opt: "); 
+                    dtostrf(settings.t_opt, 4, 1, valBuf); 
+                    break;
+            case 2: lcd_print("T max: "); 
+                    dtostrf(settings.t_max, 4, 1, valBuf); 
+                    break;
+            case 3: lcd_print("H low: "); 
+                    dtostrf(settings.h_low, 4, 1, valBuf); 
+                    break;
+            case 4: lcd_print("H high:"); 
+                    dtostrf(settings.h_high, 4, 1, valBuf); 
+                    break;
+            case 5: lcd_print("Alt offset: "); 
+                    dtostrf(settings.altitude_offset, 4, 1, valBuf); 
+                    break;
         }
-        lcd_print(valBuf); lcd_print("   ");
+        lcd_print(valBuf); 
+        lcd_print("   ");
         delay(100);
     } 
     // afisare mod monitorizare pagini
     else {
         // citire aht20 umiditate si temperatura
-        i2c_start(); i2c_write(AHT20_ADDR << 1); i2c_write(0xAC); i2c_write(0x33); i2c_write(0x00); i2c_stop();
+        i2c_start(); 
+        i2c_write(AHT20_ADDR << 1); 
+        i2c_write(0xAC); 
+        i2c_write(0x33); 
+        i2c_write(0x00); 
+        i2c_stop();
         delay(80);
-        i2c_start(); i2c_write((AHT20_ADDR << 1) | 1);
-        i2c_read(true); uint8_t h1=i2c_read(true), h2=i2c_read(true), h3=i2c_read(true), t1=i2c_read(true), t2=i2c_read(false); i2c_stop();
+        i2c_start(); 
+        i2c_write((AHT20_ADDR << 1) | 1);
+        i2c_read(true); 
+        uint8_t h1=i2c_read(true), h2=i2c_read(true), h3=i2c_read(true), t1=i2c_read(true), t2=i2c_read(false); 
+        i2c_stop();
         
         float h = (((uint32_t)h1 << 12) | ((uint32_t)h2 << 4) | (h3 >> 4)) * 100.0f / 1048576.0f;
         float t = ((((uint32_t)h3 & 0x0F) << 16) | ((uint32_t)t1 << 8) | t2) * 200.0f / 1048576.0f - 50.0f + AHT20_T_OFFSET;
         // citire bmp280 presiune
-        i2c_start(); i2c_write(BMP280_ADDR << 1); i2c_write(0xF7);
-        i2c_start(); i2c_write((BMP280_ADDR << 1) | 1);
+        i2c_start(); 
+        i2c_write(BMP280_ADDR << 1); 
+        i2c_write(0xF7);
+        i2c_start(); 
+        i2c_write((BMP280_ADDR << 1) | 1);
         uint8_t p_msb=i2c_read(true), p_lsb=i2c_read(true), p_xlsb=i2c_read(true), t_msb=i2c_read(true), t_lsb=i2c_read(true), t_xlsb=i2c_read(false); i2c_stop();
         
         bmp_compensate_temp(((int32_t)t_msb << 12) | ((int32_t)t_lsb << 4) | (t_xlsb >> 4));
         float p_pa = bmp_compensate_pressure(((int32_t)p_msb << 12) | ((int32_t)p_lsb << 4) | (p_xlsb >> 4)) + BMP280_P_OFFSET;
         
-        if (!isfinite(p_pa) || p_pa <= 0) return;
-        if (!isfinite(P0) || P0 <= 0) P0 = p_pa; // prima citire devine referinta pentru calcul
+        if (!isfinite(p_pa) || p_pa <= 0) 
+            return;
+        if (!isfinite(P0) || P0 <= 0) 
+            P0 = p_pa; // prima citire devine referinta pentru calcul
         // calcul altitudine
         float ratio = p_pa / P0;
-        if (!isfinite(ratio) || ratio <= 0.0f) ratio = 0.0001f;
+        if (!isfinite(ratio) || ratio <= 0.0f) 
+            ratio = 0.0001f;
         float alt_raw = 44330.0f * (1.0f - powf(ratio, 0.1903f));
         float alt = alt_raw + settings.altitude_offset;
         float p_mm = smooth_pressure(p_pa / 133.322f);
         // citire lux senzor analogic de lumina
-        ADCSRA |= (1 << ADSC); while (ADCSRA & (1 << ADSC));
+        ADCSRA |= (1 << ADSC); 
+        while (ADCSRA & (1 << ADSC));
         float lux = (float)ADC * 0.9765f;
         update_leds(t, h);
         dynamic_buzzer(t, lux);
@@ -357,37 +459,58 @@ void loop() {
         // pagina 0 temperatura umiditate si punct de roua
         if (display_page == 0) {
             float dt = (temp_unit == 1) ? t * 1.8 + 32 : (temp_unit == 2 ? t + 273.15 : t);
-            lcd_print("T:"); dtostrf(dt, 5, 1, buf); lcd_print(buf); 
+            lcd_print("T:"); 
+            dtostrf(dt, 5, 1, buf); 
+            lcd_print(buf); 
             lcd_print(temp_unit == 1 ? "F" : (temp_unit == 2 ? "K" : "C"));
-            if (manual_mute) lcd_print(" [M]"); else if (lux < 10) lcd_print(" [N]");
+            if (manual_mute) 
+                lcd_print(" [M]"); 
+            else if (lux < 10) 
+                lcd_print(" [N]");
             
             lcd_send(0xC0, LCD_CMD);
-            lcd_print("H:"); dtostrf(h, 2, 0, buf); lcd_print(buf); lcd_print("% ROUA:");
+            lcd_print("H:"); 
+            dtostrf(h, 2, 0, buf);
+            lcd_print(buf); 
+            lcd_print("% ROUA:");
             float dp_c = calculate_dew_point(t, h);
             float ddp = (temp_unit == 1) ? dp_c * 1.8 + 32 : (temp_unit == 2 ? dp_c + 273.15 : dp_c);
-            dtostrf(ddp, 4, 1, buf); lcd_print(buf);
+            dtostrf(ddp, 4, 1, buf);
+            lcd_print(buf);
         } 
         // pagina 1 presiune si prognoza simpla
         else if (display_page == 1) {
             float dp = (pressure_unit == 1) ? p_mm * 1.33322f : p_mm;
-            lcd_print("P:"); dtostrf(dp, 5, 1, buf); lcd_print(buf); 
+            lcd_print("P:"); 
+            dtostrf(dp, 5, 1, buf); 
+            lcd_print(buf); 
             lcd_print(pressure_unit == 1 ? "hPa" : "mmHg");
             
             lcd_send(0xC0, LCD_CMD);
-            if (p_mm > 775) lcd_print("Cer senin"); 
-            else if (p_mm > 760) lcd_print("Frumos"); 
-            else if (p_mm > 745) lcd_print("Variabil"); 
-            else if (p_mm > 730) lcd_print("Innorat"); 
-            else lcd_print("Ploaie/Furtuna");
+            if (p_mm > 775) 
+                lcd_print("Cer senin"); 
+            else if (p_mm > 760) 
+                lcd_print("Frumos"); 
+            else if (p_mm > 745) 
+                lcd_print("Variabil"); 
+            else if (p_mm > 730) 
+                lcd_print("Innorat"); 
+            else    
+                lcd_print("Ploaie/Furtuna");
         } 
         // pagina 2 altitudine si luminozitate
         else {
             float da = (altitude_unit == 1) ? alt * 3.28084f : alt;
-            lcd_print("Alt:"); dtostrf(da, 4, 1, buf); lcd_print(buf); 
+            lcd_print("Alt:"); 
+            dtostrf(da, 4, 1, buf); 
+            lcd_print(buf); 
             lcd_print(altitude_unit == 1 ? "ft" : "m");
             
             lcd_send(0xC0, LCD_CMD);
-            lcd_print("Lum: "); dtostrf(lux, 4, 1, buf); lcd_print(buf); lcd_print(" lx");
+            lcd_print("Lum: ");
+            dtostrf(lux, 4, 1, buf);
+            lcd_print(buf); 
+            lcd_print(" lx");
         }
         delay(200);
     }
